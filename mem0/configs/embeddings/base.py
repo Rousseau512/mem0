@@ -20,8 +20,6 @@ class BaseEmbedderConfig(ABC):
         ollama_base_url: Optional[str] = None,
         # Openai specific
         openai_base_url: Optional[str] = None,
-        use_codex_oauth: Optional[bool] = None,
-        codex_auth_file: Optional[str] = None,
         # Huggingface specific
         model_kwargs: Optional[dict] = None,
         huggingface_base_url: Optional[str] = None,
@@ -60,10 +58,6 @@ class BaseEmbedderConfig(ABC):
         :type huggingface_base_url: Optional[str], optional
         :param openai_base_url: Openai base URL to be use, defaults to "https://api.openai.com/v1"
         :type openai_base_url: Optional[str], optional
-        :param use_codex_oauth: Use Codex/ChatGPT OAuth credentials from ~/.codex/auth.json instead of an API key
-        :type use_codex_oauth: Optional[bool], optional
-        :param codex_auth_file: Optional path to a Codex auth.json file
-        :type codex_auth_file: Optional[str], optional
         :param azure_kwargs: key-value arguments for the AzureOpenAI embedding model, defaults a dict inside init
         :type azure_kwargs: Optional[Dict[str, Any]], defaults a dict inside init
         :param http_client_proxies: The proxy server settings used to create self.http_client, defaults to None
@@ -83,8 +77,6 @@ class BaseEmbedderConfig(ABC):
         self.model = model
         self.api_key = api_key
         self.openai_base_url = openai_base_url
-        self.use_codex_oauth = use_codex_oauth
-        self.codex_auth_file = codex_auth_file
         self.embedding_dims = embedding_dims
 
         # AzureOpenAI specific

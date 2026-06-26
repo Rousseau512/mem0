@@ -122,35 +122,3 @@ def test_embed_passes_dimensions_only_when_explicit(mock_openai_client):
     mock_openai_client.embeddings.create.assert_called_once_with(
         input=["truncate me"], model="text-embedding-3-small", dimensions=256, encoding_format="float"
     )
-
-
-def _fake_codex_token(account_id="acct_test", exp=4102444800):
-    import base64
-    import json
-
-    def encode(payload):
-        return base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
-
-    payload = {"exp": exp, "https://api.openai.com/auth": {"chatgpt_account_id": account_id}}
-    return f"{encode({'alg': 'none', 'typ': 'JWT'})}.{encode(payload)}.signature"
-
-
-def test_openai_embedding_uses_codex_oauth_when_enabled(tmp_path, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-    token = _fake_codex_token()
-    auth_file = tmp_path / "auth.json"
-    auth_file.write_text(
-        '{"tokens":{"access_token":"%s","refresh_token":"refresh","account_id":"acct_test"}}' % token,
-        encoding="utf-8",
-    )
-
-    config = BaseEmbedderConfig(use_codex_oauth=True, codex_auth_file=str(auth_file))
-    with patch("mem0.embeddings.openai.OpenAI") as mock_openai:
-        OpenAIEmbedding(config)
-
-    mock_openai.assert_called_once_with(
-        api_key=token,
-        base_url="https://api.openai.com/v1",
-        default_headers={"chatgpt-account-id": "acct_test", "originator": "mem0"},
-    )

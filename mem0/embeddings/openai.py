@@ -6,7 +6,6 @@ from openai import OpenAI
 
 from mem0.configs.embeddings.base import BaseEmbedderConfig
 from mem0.embeddings.base import EmbeddingBase
-from mem0.utils.codex_oauth import load_codex_oauth_credentials, should_use_codex_oauth
 
 
 class OpenAIEmbedding(EmbeddingBase):
@@ -33,16 +32,7 @@ class OpenAIEmbedding(EmbeddingBase):
                 DeprecationWarning,
             )
 
-        default_headers = None
-        if should_use_codex_oauth(
-            api_key,
-            base_url,
-            getattr(self.config, "use_codex_oauth", None),
-            getattr(self.config, "codex_auth_file", None),
-        ):
-            api_key, default_headers = load_codex_oauth_credentials(getattr(self.config, "codex_auth_file", None))
-
-        self.client = OpenAI(api_key=api_key, base_url=base_url, default_headers=default_headers)
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
 
     def embed(self, text, memory_action: Optional[Literal["add", "search", "update"]] = None):
         """
