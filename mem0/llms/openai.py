@@ -9,6 +9,7 @@ from mem0.configs.llms.base import BaseLlmConfig
 from mem0.configs.llms.openai import OpenAIConfig
 from mem0.llms.base import LLMBase
 from mem0.memory.utils import extract_json
+from mem0.utils.codex_oauth import load_codex_oauth_credentials, should_use_codex_oauth
 
 
 class OpenAILLM(LLMBase):
@@ -32,6 +33,8 @@ class OpenAILLM(LLMBase):
                 reasoning_effort=getattr(config, 'reasoning_effort', None),
                 http_client_proxies=config.http_client_proxies,
                 is_reasoning_model=getattr(config, 'is_reasoning_model', None),
+                use_codex_oauth=getattr(config, 'use_codex_oauth', None),
+                codex_auth_file=getattr(config, 'codex_auth_file', None),
             )
 
         super().__init__(config)
@@ -49,8 +52,16 @@ class OpenAILLM(LLMBase):
         else:
             api_key = self.config.api_key or os.getenv("OPENAI_API_KEY")
             base_url = self.config.openai_base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            default_headers = None
+            if should_use_codex_oauth(
+                api_key,
+                base_url,
+                self.config.use_codex_oauth,
+                self.config.codex_auth_file,
+            ):
+                api_key, default_headers = load_codex_oauth_credentials(self.config.codex_auth_file)
 
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
+            self.client = OpenAI(api_key=api_key, base_url=base_url, default_headers=default_headers)
 
     def _parse_response(self, response, tools):
         """

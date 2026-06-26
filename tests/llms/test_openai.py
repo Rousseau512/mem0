@@ -464,3 +464,46 @@ def test_openai_llm_preserves_proxies_from_base_config(mock_openai_client):
     llm = OpenAILLM(config)
     assert llm.config.http_client_proxies == "http://proxy.local:8080"
     assert isinstance(llm.config.http_client, httpx.Client)
+
+
+def _fake_codex_token(account_id="acct_test", exp=4102444800):
+    import base64
+    import json
+
+    def encode(payload):
+        return base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+
+    payload = {"exp": exp, "https://api.openai.com/auth": {"chatgpt_account_id": account_id}}
+    return f"{encode({'alg': 'none', 'typ': 'JWT'})}.{encode(payload)}.signature"
+
+
+def test_openai_llm_uses_codex_oauth_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    token = _fake_codex_token()
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        '{"tokens":{"access_token":"%s","refresh_token":"refresh","account_id":"acct_test"}}' % token,
+        encoding="utf-8",
+    )
+
+    with patch("mem0.llms.openai.OpenAI") as mock_openai:
+        OpenAILLM(OpenAIConfig(use_codex_oauth=True, codex_auth_file=str(auth_file)))
+
+    mock_openai.assert_called_once_with(
+        api_key=token,
+        base_url="https://api.openai.com/v1",
+        default_headers={"chatgpt-account-id": "acct_test", "originator": "mem0"},
+    )
+
+
+def test_openai_llm_prefers_api_key_unless_codex_oauth_enabled(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    with patch("mem0.llms.openai.OpenAI") as mock_openai:
+        OpenAILLM(OpenAIConfig())
+
+    mock_openai.assert_called_once_with(
+        api_key="sk-test",
+        base_url="https://api.openai.com/v1",
+        default_headers=None,
+    )
