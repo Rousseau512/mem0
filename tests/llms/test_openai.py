@@ -477,12 +477,13 @@ def _fake_codex_token(account_id="acct_test", exp=4102444800):
     return f"{encode({'alg': 'none', 'typ': 'JWT'})}.{encode(payload)}.signature"
 
 
-def test_openai_llm_uses_codex_oauth_when_enabled(tmp_path, monkeypatch):
+def test_openai_llm_uses_pi_codex_oauth_when_enabled(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     token = _fake_codex_token()
     auth_file = tmp_path / "auth.json"
     auth_file.write_text(
-        '{"tokens":{"access_token":"%s","refresh_token":"refresh","account_id":"acct_test"}}' % token,
+        '{"openai-codex":{"type":"oauth","access":"%s","refresh":"refresh",'
+        '"expires":4102444800000,"accountId":"acct_test"}}' % token,
         encoding="utf-8",
     )
 
@@ -491,9 +492,50 @@ def test_openai_llm_uses_codex_oauth_when_enabled(tmp_path, monkeypatch):
 
     mock_openai.assert_called_once_with(
         api_key=token,
-        base_url="https://api.openai.com/v1",
-        default_headers={"chatgpt-account-id": "acct_test", "originator": "mem0"},
+        base_url="https://chatgpt.com/backend-api/codex",
+        default_headers={
+            "chatgpt-account-id": "acct_test",
+            "originator": "mem0",
+            "OpenAI-Beta": "responses=experimental",
+        },
     )
+
+
+def test_openai_llm_generates_with_codex_responses_api(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    token = _fake_codex_token()
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        '{"openai-codex":{"type":"oauth","access":"%s","refresh":"refresh",'
+        '"expires":4102444800000,"accountId":"acct_test"}}' % token,
+        encoding="utf-8",
+    )
+
+    with patch("mem0.llms.openai.OpenAI") as mock_openai:
+        mock_client = Mock()
+        mock_response = Mock(output_text='{"memory": []}', output=[])
+        mock_client.responses.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        llm = OpenAILLM(OpenAIConfig(model="gpt-5.5", use_codex_oauth=True, codex_auth_file=str(auth_file)))
+        response = llm.generate_response(
+            messages=[
+                {"role": "system", "content": "Return JSON."},
+                {"role": "user", "content": "remember nothing"},
+            ],
+            response_format={"type": "json_object"},
+        )
+
+    assert response == '{"memory": []}'
+    mock_client.responses.create.assert_called_once()
+    call_kwargs = mock_client.responses.create.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-5.5"
+    assert call_kwargs["instructions"] == "Return JSON."
+    assert call_kwargs["input"] == [
+        {"role": "user", "content": [{"type": "input_text", "text": "remember nothing"}]}
+    ]
+    assert call_kwargs["store"] is False
+    assert call_kwargs["text"]["format"] == {"type": "json_object"}
 
 
 def test_openai_llm_prefers_api_key_unless_codex_oauth_enabled(monkeypatch):

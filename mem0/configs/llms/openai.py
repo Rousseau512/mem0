@@ -33,6 +33,7 @@ class OpenAIConfig(BaseLlmConfig):
         store: Optional[bool] = None,
         use_codex_oauth: Optional[bool] = None,
         codex_auth_file: Optional[str] = None,
+        codex_base_url: Optional[str] = None,
         # Response monitoring callback
         response_callback: Optional[Callable[[Any, dict, dict], None]] = None,
     ):
@@ -64,9 +65,11 @@ class OpenAIConfig(BaseLlmConfig):
                 want the value forwarded to the OpenAI API. Leaving it None
                 avoids leaking the field into OpenAI-compatible backends that
                 reject unknown fields (Gemini, Groq, vLLM, etc.).
-            use_codex_oauth: Use Codex/ChatGPT OAuth credentials from ~/.codex/auth.json instead of an API key.
+            use_codex_oauth: Use ChatGPT Plus/Pro Codex OAuth credentials instead of an OpenAI API key.
                 If None, OAuth can still be enabled with OPENAI_USE_CODEX_OAUTH=true or CODEX_OAUTH=true.
-            codex_auth_file: Optional path to a Codex auth.json file. Defaults to ~/.codex/auth.json.
+            codex_auth_file: Optional path to a Pi/Codex auth.json file. Defaults to ~/.pi/agent/auth.json,
+                with ~/.codex/auth.json supported as a fallback.
+            codex_base_url: Optional Codex Responses backend URL. Defaults to https://chatgpt.com/backend-api/codex.
             response_callback: Optional callback for monitoring LLM responses.
         """
         # Initialize base parameters
@@ -94,6 +97,7 @@ class OpenAIConfig(BaseLlmConfig):
         self.store = store
         self.use_codex_oauth = use_codex_oauth
         self.codex_auth_file = codex_auth_file
+        self.codex_base_url = codex_base_url
 
         # Response monitoring
         self.response_callback = response_callback

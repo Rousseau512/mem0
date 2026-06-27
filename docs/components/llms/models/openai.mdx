@@ -3,7 +3,9 @@ title: OpenAI
 description: "Configure OpenAI as an LLM provider in Mem0 with support for GPT models and Openrouter compatibility."
 ---
 
-To use OpenAI LLM models, you have to set the `OPENAI_API_KEY` environment variable. You can obtain the OpenAI API key from the [OpenAI Platform](https://platform.openai.com/account/api-keys).
+To use OpenAI LLM models, set the `OPENAI_API_KEY` environment variable. You can obtain the OpenAI API key from the [OpenAI Platform](https://platform.openai.com/account/api-keys).
+
+Mem0 can also use ChatGPT Plus/Pro Codex OAuth credentials created by Pi. Run `/login` in Pi, select ChatGPT Plus/Pro (Codex), then set `use_codex_oauth=True` in the OpenAI LLM config or export `OPENAI_USE_CODEX_OAUTH=true`. Mem0 reads Pi's `~/.pi/agent/auth.json` by default and calls the Codex Responses backend instead of the standard OpenAI API-key endpoint.
 
 > **Note**: The following are currently unsupported with reasoning models `Parallel tool calling`,`temperature`, `top_p`, `presence_penalty`, `frequency_penalty`, `logprobs`, `top_logprobs`, `logit_bias`, `max_tokens`
 
@@ -73,6 +75,26 @@ const messages = [
 await memory.add(messages, { userId: "alice", metadata: { category: "movies" } });
 ```
 </CodeGroup>
+
+### ChatGPT Plus/Pro Codex OAuth
+
+```python
+from mem0 import Memory
+
+config = {
+    "llm": {
+        "provider": "openai",
+        "config": {
+            "model": "gpt-5.5",
+            "use_codex_oauth": True,
+            # Optional: override Pi's default ~/.pi/agent/auth.json path.
+            # "codex_auth_file": "~/.pi/agent/auth.json",
+        }
+    }
+}
+
+m = Memory.from_config(config)
+```
 
 We also support the new [OpenAI structured-outputs](https://platform.openai.com/docs/guides/structured-outputs/introduction) model.
 

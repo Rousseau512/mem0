@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from openai import OpenAI
 
@@ -9,7 +9,7 @@ from mem0.configs.llms.base import BaseLlmConfig
 from mem0.configs.llms.openai import OpenAIConfig
 from mem0.llms.base import LLMBase
 from mem0.memory.utils import extract_json
-from mem0.utils.codex_oauth import load_codex_oauth_credentials, should_use_codex_oauth
+from mem0.utils.codex_oauth import load_codex_oauth_credentials, resolve_codex_base_url, should_use_codex_oauth
 
 
 class OpenAILLM(LLMBase):
@@ -35,12 +35,16 @@ class OpenAILLM(LLMBase):
                 is_reasoning_model=getattr(config, 'is_reasoning_model', None),
                 use_codex_oauth=getattr(config, 'use_codex_oauth', None),
                 codex_auth_file=getattr(config, 'codex_auth_file', None),
+                codex_base_url=getattr(config, 'codex_base_url', None),
             )
 
         super().__init__(config)
 
-        if not self.config.model:
+        model_was_defaulted = not self.config.model
+        if model_was_defaulted:
             self.config.model = "gpt-5-mini"
+
+        self._use_codex_oauth = False
 
         if os.environ.get("OPENROUTER_API_KEY"):  # Use OpenRouter
             self.client = OpenAI(
@@ -51,15 +55,22 @@ class OpenAILLM(LLMBase):
             )
         else:
             api_key = self.config.api_key or os.getenv("OPENAI_API_KEY")
-            base_url = self.config.openai_base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            standard_base_url = (
+                self.config.openai_base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            )
+            base_url = standard_base_url
             default_headers = None
             if should_use_codex_oauth(
                 api_key,
-                base_url,
+                standard_base_url,
                 self.config.use_codex_oauth,
                 self.config.codex_auth_file,
             ):
                 api_key, default_headers = load_codex_oauth_credentials(self.config.codex_auth_file)
+                base_url = resolve_codex_base_url(self.config.codex_base_url or os.getenv("OPENAI_CODEX_BASE_URL"))
+                if model_was_defaulted:
+                    self.config.model = "gpt-5.5"
+                self._use_codex_oauth = True
 
             self.client = OpenAI(api_key=api_key, base_url=base_url, default_headers=default_headers)
 
@@ -93,6 +104,144 @@ class OpenAILLM(LLMBase):
         else:
             return response.choices[0].message.content
 
+    @staticmethod
+    def _get_response_field(item: Any, field: str, default: Any = None) -> Any:
+        if isinstance(item, dict):
+            return item.get(field, default)
+        return getattr(item, field, default)
+
+    def _split_responses_messages(self, messages: List[Dict[str, str]]) -> tuple[str, List[Dict[str, Any]]]:
+        instructions = []
+        input_messages = []
+
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            text = content if isinstance(content, str) else json.dumps(content)
+
+            if role in {"system", "developer"}:
+                instructions.append(text)
+                continue
+
+            responses_role = "assistant" if role == "assistant" else "user"
+            content_type = "output_text" if responses_role == "assistant" else "input_text"
+            input_messages.append({"role": responses_role, "content": [{"type": content_type, "text": text}]})
+
+        return "\n\n".join(instructions) or "You are a helpful assistant.", input_messages
+
+    def _convert_tools_for_responses(self, tools: Optional[List[Dict]]) -> Optional[List[Dict[str, Any]]]:
+        if not tools:
+            return None
+
+        responses_tools = []
+        for tool in tools:
+            if tool.get("type") == "function" and "function" in tool:
+                function = tool["function"]
+                converted = {
+                    "type": "function",
+                    "name": function["name"],
+                    "description": function.get("description", ""),
+                    "parameters": function.get("parameters", {}),
+                }
+                if "strict" in function:
+                    converted["strict"] = function["strict"]
+                responses_tools.append(converted)
+            else:
+                responses_tools.append(tool)
+
+        return responses_tools
+
+    def _collect_responses_text(self, response: Any) -> str:
+        output_text = getattr(response, "output_text", None)
+        if output_text is not None:
+            return output_text
+
+        texts = []
+        for item in getattr(response, "output", []) or []:
+            item_type = self._get_response_field(item, "type")
+            if item_type == "message":
+                for content in self._get_response_field(item, "content", []) or []:
+                    content_type = self._get_response_field(content, "type")
+                    if content_type in {"output_text", "text"}:
+                        text = self._get_response_field(content, "text", "")
+                        if text:
+                            texts.append(text)
+            elif item_type in {"output_text", "text"}:
+                text = self._get_response_field(item, "text", "")
+                if text:
+                    texts.append(text)
+
+        return "\n".join(texts)
+
+    def _parse_responses_response(self, response: Any, tools: Optional[List[Dict]]) -> Union[str, Dict[str, Any]]:
+        content = self._collect_responses_text(response)
+        if not tools:
+            return content
+
+        processed_response = {"content": content, "tool_calls": []}
+        for item in getattr(response, "output", []) or []:
+            if self._get_response_field(item, "type") != "function_call":
+                continue
+            arguments = self._get_response_field(item, "arguments", "{}")
+            parsed_arguments = json.loads(extract_json(arguments)) if isinstance(arguments, str) else arguments
+            processed_response["tool_calls"].append(
+                {
+                    "name": self._get_response_field(item, "name"),
+                    "arguments": parsed_arguments,
+                }
+            )
+        return processed_response
+
+    def _generate_codex_response(
+        self,
+        messages: List[Dict[str, str]],
+        response_format=None,
+        tools: Optional[List[Dict]] = None,
+        tool_choice: str = "auto",
+        **kwargs,
+    ):
+        if not hasattr(self.client, "responses"):
+            raise RuntimeError("Codex OAuth requires an OpenAI Python SDK version with Responses API support")
+
+        instructions, input_messages = self._split_responses_messages(messages)
+        text_config = {"verbosity": "low"}
+        if response_format:
+            text_config["format"] = response_format
+
+        params = {
+            "model": self.config.model,
+            "instructions": instructions,
+            "input": input_messages,
+            "store": False,
+            "text": text_config,
+            "parallel_tool_calls": True,
+        }
+
+        if self.config.max_tokens:
+            params["max_output_tokens"] = self.config.max_tokens
+
+        if self.config.reasoning_effort:
+            params["reasoning"] = {"effort": self.config.reasoning_effort, "summary": "auto"}
+
+        responses_tools = self._convert_tools_for_responses(tools)
+        if responses_tools:
+            params["tools"] = responses_tools
+            params["tool_choice"] = tool_choice
+
+        for key in ("temperature", "top_p", "service_tier"):
+            if key in kwargs:
+                params[key] = kwargs[key]
+
+        response = self.client.responses.create(**params)
+        parsed_response = self._parse_responses_response(response, tools)
+        if self.config.response_callback:
+            try:
+                self.config.response_callback(self, response, params)
+            except Exception as e:
+                logging.error(f"Error due to callback: {e}")
+                pass
+        return parsed_response
+
     def generate_response(
         self,
         messages: List[Dict[str, str]],
@@ -114,6 +263,15 @@ class OpenAILLM(LLMBase):
         Returns:
             json: The generated response.
         """
+        if self._use_codex_oauth:
+            return self._generate_codex_response(
+                messages=messages,
+                response_format=response_format,
+                tools=tools,
+                tool_choice=tool_choice,
+                **kwargs,
+            )
+
         params = self._get_supported_params(messages=messages, **kwargs)
         
         params.update({
