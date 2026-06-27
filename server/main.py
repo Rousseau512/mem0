@@ -59,7 +59,7 @@ SKIPPED_REQUEST_LOG_PATHS = {"/api/health", "/docs", "/redoc", "/openapi.json"}
 SKIPPED_REQUEST_LOG_PREFIXES = ("/requests",)
 
 BUNDLED_LLM_PROVIDERS = ("openai", "anthropic", "gemini")
-BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini")
+BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini", "local_hash")
 
 
 def _warn_if_unconfigured() -> None:
@@ -114,7 +114,9 @@ POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
 DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL", "gpt-4.1-nano-2025-04-14")
+DEFAULT_EMBEDDER_PROVIDER = os.environ.get("MEM0_DEFAULT_EMBEDDER_PROVIDER", "openai")
 DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL", "text-embedding-3-small")
+DEFAULT_INFER = os.environ.get("MEM0_DEFAULT_INFER", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 DEFAULT_CONFIG = {
     "version": "v1.1",
@@ -133,7 +135,10 @@ DEFAULT_CONFIG = {
         "provider": "openai",
         "config": {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL},
     },
-    "embedder": {"provider": "openai", "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL}},
+    "embedder": {
+        "provider": DEFAULT_EMBEDDER_PROVIDER,
+        "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL},
+    },
     "history_db_path": HISTORY_DB_PATH,
 }
 
@@ -370,6 +375,7 @@ def add_memory(memory_create: MemoryCreate, _auth=Depends(verify_auth)):
         raise HTTPException(status_code=400, detail="At least one identifier (user_id, agent_id, run_id) is required.")
 
     params = {k: v for k, v in memory_create.model_dump().items() if v is not None and k != "messages"}
+    params.setdefault("infer", DEFAULT_INFER)
     try:
         response = get_memory_instance().add(messages=[m.model_dump() for m in memory_create.messages], **params)
         if response.get("results"):

@@ -14,11 +14,13 @@ services:
     volumes:
       - ./history:/app/history
       - .:/app
+      - ..:/repo:ro
+      - ${CODEX_AUTH_FILE_HOST:-${HOME}/.codex/auth.json}:${CODEX_AUTH_FILE:-/root/.codex/auth.json}:ro
     depends_on:
       postgres:
         condition: service_healthy
     command: >
-      sh -c "rm -rf /app/packages && pip install -q --force-reinstall --no-deps mem0ai && alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+      sh -c "pip install -q --force-reinstall --no-deps /repo && alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
