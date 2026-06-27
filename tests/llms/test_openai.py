@@ -514,7 +514,10 @@ def test_openai_llm_generates_with_codex_responses_api(tmp_path, monkeypatch):
     with patch("mem0.llms.openai.OpenAI") as mock_openai:
         mock_client = Mock()
         mock_response = Mock(output_text='{"memory": []}', output=[])
-        mock_client.responses.create.return_value = mock_response
+        mock_client.responses.create.return_value = [
+            {"type": "response.output_text.delta", "delta": '{"memory": []}'},
+            {"type": "response.completed", "response": mock_response},
+        ]
         mock_openai.return_value = mock_client
 
         llm = OpenAILLM(OpenAIConfig(model="gpt-5.5", use_codex_oauth=True, codex_auth_file=str(auth_file)))
@@ -532,9 +535,12 @@ def test_openai_llm_generates_with_codex_responses_api(tmp_path, monkeypatch):
     assert call_kwargs["model"] == "gpt-5.5"
     assert call_kwargs["instructions"] == "Return JSON."
     assert call_kwargs["input"] == [
-        {"role": "user", "content": [{"type": "input_text", "text": "remember nothing"}]}
+        {"role": "user", "content": [{"type": "input_text", "text": "remember nothing"}]},
+        {"role": "user", "content": [{"type": "input_text", "text": "Respond with valid JSON."}]},
     ]
     assert call_kwargs["store"] is False
+    assert call_kwargs["stream"] is True
+    assert "max_output_tokens" not in call_kwargs
     assert call_kwargs["text"]["format"] == {"type": "json_object"}
 
 

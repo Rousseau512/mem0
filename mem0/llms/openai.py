@@ -151,6 +151,27 @@ class OpenAILLM(LLMBase):
 
         return responses_tools
 
+    @staticmethod
+    def _requires_json_object_response(response_format: Any) -> bool:
+        return isinstance(response_format, dict) and response_format.get("type") == "json_object"
+
+    def _ensure_responses_json_hint(self, input_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Ensure JSON mode validation sees a JSON hint in Responses input.
+
+        The ChatGPT/Codex Responses backend validates the ``json_object`` response format against the ``input``
+        messages, not the separate ``instructions`` field. Memory extraction prompts put output guidance in system
+        instructions, so add a tiny input hint when needed.
+        """
+
+        serialized_input = json.dumps(input_messages).lower()
+        if "json" in serialized_input:
+            return input_messages
+
+        return [
+            *input_messages,
+            {"role": "user", "content": [{"type": "input_text", "text": "Respond with valid JSON."}]},
+        ]
+
     def _collect_responses_text(self, response: Any) -> str:
         output_text = getattr(response, "output_text", None)
         if output_text is not None:
@@ -192,6 +213,82 @@ class OpenAILLM(LLMBase):
             )
         return processed_response
 
+    def _parse_responses_stream(
+        self, stream: Any, tools: Optional[List[Dict]]
+    ) -> tuple[Union[str, Dict[str, Any]], Any]:
+        """Parse a streaming Responses API result.
+
+        The ChatGPT/Codex subscription backend currently requires streaming requests. Prefer the final
+        ``response.completed`` payload when the SDK exposes it, but also collect deltas so lightweight mocks and
+        partial streams remain parseable.
+        """
+
+        text_parts: List[str] = []
+        final_response = None
+        tool_calls: Dict[str, Dict[str, Any]] = {}
+
+        for event in stream:
+            event_type = self._get_response_field(event, "type", "")
+
+            if event_type == "response.completed":
+                final_response = self._get_response_field(event, "response")
+                continue
+
+            if event_type == "response.output_text.delta":
+                delta = self._get_response_field(event, "delta", "")
+                if delta:
+                    text_parts.append(delta)
+                continue
+
+            if event_type == "response.output_text.done" and not text_parts:
+                text = self._get_response_field(event, "text", "")
+                if text:
+                    text_parts.append(text)
+                continue
+
+            if event_type in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
+                call_id = self._get_response_field(event, "call_id")
+                item_id = self._get_response_field(event, "item_id")
+                output_index = self._get_response_field(event, "output_index")
+                key = str(call_id or item_id or output_index or len(tool_calls))
+                call = tool_calls.setdefault(key, {"name": self._get_response_field(event, "name"), "arguments": ""})
+                if self._get_response_field(event, "name"):
+                    call["name"] = self._get_response_field(event, "name")
+                if event_type.endswith(".delta"):
+                    call["arguments"] += self._get_response_field(event, "delta", "") or ""
+                else:
+                    call["arguments"] = self._get_response_field(event, "arguments", call["arguments"] or "{}")
+                continue
+
+            if event_type == "response.output_item.done":
+                item = self._get_response_field(event, "item")
+                if self._get_response_field(item, "type") == "function_call":
+                    key = str(
+                        self._get_response_field(item, "call_id")
+                        or self._get_response_field(item, "id")
+                        or len(tool_calls)
+                    )
+                    tool_calls[key] = {
+                        "name": self._get_response_field(item, "name"),
+                        "arguments": self._get_response_field(item, "arguments", "{}"),
+                    }
+
+        if final_response is not None:
+            parsed = self._parse_responses_response(final_response, tools)
+            if tools or parsed:
+                return parsed, final_response
+
+        content = "".join(text_parts)
+        if not tools:
+            return content, final_response
+
+        processed_response = {"content": content, "tool_calls": []}
+        for call in tool_calls.values():
+            arguments = call.get("arguments") or "{}"
+            parsed_arguments = json.loads(extract_json(arguments)) if isinstance(arguments, str) else arguments
+            processed_response["tool_calls"].append({"name": call.get("name"), "arguments": parsed_arguments})
+        return processed_response, final_response
+
     def _generate_codex_response(
         self,
         messages: List[Dict[str, str]],
@@ -207,6 +304,8 @@ class OpenAILLM(LLMBase):
         text_config = {"verbosity": "low"}
         if response_format:
             text_config["format"] = response_format
+            if self._requires_json_object_response(response_format):
+                input_messages = self._ensure_responses_json_hint(input_messages)
 
         params = {
             "model": self.config.model,
@@ -217,9 +316,8 @@ class OpenAILLM(LLMBase):
             "parallel_tool_calls": True,
         }
 
-        if self.config.max_tokens:
-            params["max_output_tokens"] = self.config.max_tokens
-
+        # The ChatGPT/Codex Responses backend currently rejects max_output_tokens even though the public Responses API
+        # accepts it. Omit the cap and let the backend apply its model defaults.
         if self.config.reasoning_effort:
             params["reasoning"] = {"effort": self.config.reasoning_effort, "summary": "auto"}
 
@@ -232,11 +330,13 @@ class OpenAILLM(LLMBase):
             if key in kwargs:
                 params[key] = kwargs[key]
 
+        params["stream"] = True
         response = self.client.responses.create(**params)
-        parsed_response = self._parse_responses_response(response, tools)
+        parsed_response, final_response = self._parse_responses_stream(response, tools)
+        callback_response = final_response if final_response is not None else response
         if self.config.response_callback:
             try:
-                self.config.response_callback(self, response, params)
+                self.config.response_callback(self, callback_response, params)
             except Exception as e:
                 logging.error(f"Error due to callback: {e}")
                 pass

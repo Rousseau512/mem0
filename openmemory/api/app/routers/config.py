@@ -15,6 +15,11 @@ class LLMConfig(BaseModel):
     max_tokens: int = Field(..., description="Maximum tokens to generate")
     api_key: Optional[str] = Field(None, description="API key or 'env:API_KEY' to use environment variable")
     ollama_base_url: Optional[str] = Field(None, description="Base URL for Ollama server (e.g., http://host.docker.internal:11434)")
+    openai_base_url: Optional[str] = Field(None, description="OpenAI-compatible API base URL")
+    openrouter_base_url: Optional[str] = Field(None, description="OpenRouter API base URL")
+    use_codex_oauth: Optional[bool] = Field(None, description="Use local Codex/OpenAI OAuth credentials")
+    codex_auth_file: Optional[str] = Field(None, description="Path to Pi/Codex OAuth auth.json")
+    codex_base_url: Optional[str] = Field(None, description="Codex OAuth backend base URL")
 
 class LLMProvider(BaseModel):
     provider: str = Field(..., description="LLM provider name")
@@ -24,6 +29,10 @@ class EmbedderConfig(BaseModel):
     model: str = Field(..., description="Embedder model name")
     api_key: Optional[str] = Field(None, description="API key or 'env:API_KEY' to use environment variable")
     ollama_base_url: Optional[str] = Field(None, description="Base URL for Ollama server (e.g., http://host.docker.internal:11434)")
+    openai_base_url: Optional[str] = Field(None, description="OpenAI-compatible embedding API base URL")
+    huggingface_base_url: Optional[str] = Field(None, description="HuggingFace TEI/OpenAI-compatible base URL")
+    lmstudio_base_url: Optional[str] = Field(None, description="LM Studio embedding API base URL")
+    embedding_dims: Optional[int] = Field(None, description="Embedding vector dimensions")
 
 class EmbedderProvider(BaseModel):
     provider: str = Field(..., description="Embedder provider name")
